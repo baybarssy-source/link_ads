@@ -14,21 +14,24 @@
 """
 from __future__ import annotations
 
+import csv
+import io
 import json
 import os
 import re
 import subprocess
 import sys
 import urllib.request
+from datetime import date, datetime
 from pathlib import Path
 
 from PySide6.QtCore import QThread, QTimer, Qt, QUrl, Signal
 from PySide6.QtGui import QColor, QDesktopServices, QGuiApplication, QImage, QPixmap, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import (
-    QApplication, QColorDialog, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout,
-    QGridLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow,
-    QMessageBox, QPlainTextEdit, QPushButton, QScrollArea, QSpinBox, QSplitter, QTextEdit,
-    QVBoxLayout, QWidget,
+    QAbstractItemView, QApplication, QColorDialog, QComboBox, QDialog, QDialogButtonBox, QFileDialog,
+    QFormLayout, QGridLayout, QGroupBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListWidget,
+    QListWidgetItem, QMainWindow, QMessageBox, QPlainTextEdit, QPushButton, QScrollArea, QSpinBox, QSplitter,
+    QTableWidget, QTableWidgetItem, QTextEdit, QVBoxLayout, QWidget,
 )
 
 from ui_common import FEEDBACK_CSS, install_wheel_guard
@@ -286,6 +289,199 @@ def fetch(url: str) -> tuple[int | str, str]:
         return e.code, ""
     except Exception:  # noqa: BLE001
         return "بلا اتّصال", ""
+
+# ───────────────────────── إحصاءات الحملات من Play Console ─────────────────────────
+# تقرير «أداء صفحة المتجر» الشهري في مخزن تقارير Play (Cloud Storage)، تفصيل «مصدر الزيارة»، وفيه عمود
+# «UTM campaign» لكل زيارة جاءت برابط فيه referrer (كرابط صفحتنا). يُحدَّث يوميًّا بتأخير يومين تقريبًا.
+STATS_CACHE = ROOT / "stats_cache.json"          # آخر قراءة، تظهر فور فتح الأداة (لا تُرفع)
+STATS_SCOPE = "https://www.googleapis.com/auth/devstorage.read_only"
+REPORT_PATH = "stats/store_performance/store_performance_{pkg}_{month}_traffic_source.csv"
+
+
+def last_months(n: int, today: date | None = None) -> list[str]:
+    """['202611', '202610', …] من الشهر الحالي إلى الوراء."""
+    d = today or date.today()
+    y, m, out = d.year, d.month, []
+    for _ in range(max(1, n)):
+        out.append(f"{y}{m:02d}")
+        y, m = (y, m - 1) if m > 1 else (y - 1, 12)
+    return out
+
+
+def normalize_bucket(text: str) -> str:
+    """يقبل gs://pubsite_prod_rev_123/ أو الاسم وحده."""
+    t = text.strip().removeprefix("gs://").strip("/")
+    return t.split("/")[0] if t else ""
+
+
+def _num(v: str) -> float:
+    v = (v or "").strip().replace(",", "").replace("%", "")
+    try:
+        return float(v)
+    except ValueError:
+        return 0.0
+
+
+def parse_store_csv(raw: bytes) -> list[dict]:
+    """تقارير Play بترميز UTF-16 غالبًا (وقد تأتي UTF-8). يعيد الصفوف بأسماء أعمدة صغيرة."""
+    if raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        text = raw.decode("utf-16")
+    else:
+        text = raw.decode("utf-8-sig", "replace")
+    reader = csv.DictReader(io.StringIO(text))
+    return [{(k or "").strip().lower(): (v or "").strip() for k, v in row.items()} for row in reader]
+
+
+def aggregate_campaigns(rows: list[dict]) -> list[dict]:
+    """يجمع الزوّار والتنزيلات لكل (مصدر، حملة)، ويرتّبها من الأنجح."""
+    agg: dict[tuple[str, str], dict] = {}
+    for r in rows:
+        camp = r.get("utm campaign", "")
+        if not camp:
+            continue
+        key = (r.get("utm source", "") or "—", camp)
+        a = agg.setdefault(key, {"source": key[0], "campaign": camp, "visitors": 0.0, "installs": 0.0,
+                                 "first": r.get("date", ""), "last": r.get("date", "")})
+        a["visitors"] += _num(r.get("store listing visitors", ""))
+        a["installs"] += _num(r.get("store listing acquisitions", ""))
+        d = r.get("date", "")
+        if d:
+            a["first"] = min(a["first"] or d, d)
+            a["last"] = max(a["last"] or d, d)
+    out = []
+    for a in agg.values():
+        a["visitors"], a["installs"] = int(a["visitors"]), int(a["installs"])
+        a["rate"] = (a["installs"] / a["visitors"] * 100) if a["visitors"] else 0.0
+        out.append(a)
+    return sorted(out, key=lambda a: (-a["installs"], -a["visitors"]))
+
+
+def load_stats() -> dict:
+    try:
+        return json.loads(STATS_CACHE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def explain_stats_error(e: Exception) -> str:
+    s = str(e)
+    if "403" in s:
+        return ("رفض Google الوصول إلى التقارير. في Play Console ← المستخدمون والأذونات: أعط حساب الخدمة إذن"
+                " «عرض معلومات التطبيق وتنزيل التقارير المجمّعة» على مستوى الحساب كلّه (Global)، ثم انتظر حتى"
+                " 24 ساعة ليسري.")
+    if "404" in s and "bucket" in s.lower():
+        return "لم أجد مخزن التقارير. انسخه من Play Console ← تنزيل التقارير ← «نسخ URI لـ Cloud Storage»."
+    if any(w in s.lower() for w in ("timed out", "unable to find the server", "name resolution", "getaddrinfo",
+                                     "connection", "ssl")):
+        return "لا اتّصال بخوادم Google. تحقّق من الإنترنت أو شغّل VPN ثم أعد المحاولة."
+    return f"تعذّرت قراءة التقارير: {s[:300]}"
+
+
+class StatsWorker(QThread):
+    """يقرأ تقرير كل تطبيق لكل شهر ويجمع الحملات. لا يكتب شيئًا في حسابك (صلاحية قراءة فقط)."""
+    log = Signal(str, str)
+    done = Signal(bool, str, dict)
+
+    def __init__(self, key_path: str, bucket: str, packages: dict[str, str], months: list[str]):
+        super().__init__()
+        self.key_path, self.bucket, self.packages, self.months = key_path, bucket, packages, months
+
+    def run(self):
+        try:
+            from google.oauth2 import service_account  # noqa: PLC0415
+            from googleapiclient.discovery import build  # noqa: PLC0415
+            from googleapiclient.errors import HttpError  # noqa: PLC0415
+        except ImportError:
+            self.done.emit(False, "مكتبات Google غير مثبّتة. شغّل «تثبيت_المكتبات.bat» ثم أعد المحاولة.", {})
+            return
+        try:
+            creds = service_account.Credentials.from_service_account_file(self.key_path, scopes=[STATS_SCOPE])
+            gcs = build("storage", "v1", credentials=creds, cache_discovery=False)
+        except Exception as e:  # noqa: BLE001
+            self.done.emit(False, f"تعذّر فتح ملف مفتاح حساب الخدمة: {e}", {})
+            return
+        result, found_any = {}, False
+        for slug, pkg in self.packages.items():
+            rows = []
+            for month in self.months:
+                name = REPORT_PATH.format(pkg=pkg, month=month)
+                try:
+                    raw = gcs.objects().get_media(bucket=self.bucket, object=name).execute(num_retries=2)
+                except HttpError as e:
+                    if e.resp.status == 404:
+                        self.log.emit(f"{pkg} · {month}: لا تقرير لهذا الشهر بعد", "info")
+                        continue
+                    self.done.emit(False, explain_stats_error(e), {})
+                    return
+                except Exception as e:  # noqa: BLE001
+                    self.done.emit(False, explain_stats_error(e), {})
+                    return
+                found_any = True
+                rows += parse_store_csv(raw)
+            result[slug] = {"package": pkg, "campaigns": aggregate_campaigns(rows)}
+            n = sum(c["installs"] for c in result[slug]["campaigns"])
+            self.log.emit(f"✓ {pkg}: {len(result[slug]['campaigns'])} حملة، {n} تنزيلًا من الروابط المتتبَّعة", "ok")
+        if not found_any:
+            self.done.emit(False, "لم أجد أيّ تقرير لهذه التطبيقات في المخزن. تأكّد من رابط المخزن، وأنّ"
+                                  " التقارير تظهر في Play Console ← تنزيل التقارير ← الإحصاءات.", {})
+            return
+        stats = {"fetched": datetime.now().strftime("%Y-%m-%d %H:%M"), "months": self.months, "apps": result}
+        self.done.emit(True, "✓ قُرئت الإحصاءات.", stats)
+
+
+class StatsDialog(QDialog):
+    def __init__(self, parent, key_path: str, bucket: str, months: int):
+        super().__init__(parent)
+        self.setWindowTitle("إعداد إحصاءات Play Console")
+        self.setMinimumWidth(640)
+        lay = QVBoxLayout(self)
+        info = QLabel(
+            "الأداة تقرأ تقرير «أداء صفحة المتجر» الشهري من مخزن تقارير Play، وفيه الزوّار والتنزيلات لكل"
+            " حملة جاءت من رابط الإعلان. <b>قراءة فقط</b>، لا يتغيّر شيء في حسابك.<br><br>"
+            f"<b style='color:{C_OK}'>أوّلًا:</b> اختر ملف مفتاح حساب الخدمة (JSON)، وهو نفسه الذي تستعمله أداة"
+            " النشر ve_up.<br><br>"
+            f"<b style='color:{C_OK}'>ثانيًا:</b> في Play Console ← <b>تنزيل التقارير ← الإحصاءات</b> اضغط"
+            " «نسخ URI لـ Cloud Storage» والصقه هنا.<br><br>"
+            f"<b style='color:{C_OK}'>ثالثًا (مرّة واحدة):</b> في <b>المستخدمون والأذونات</b> تأكّد أنّ لحساب"
+            " الخدمة إذن «عرض معلومات التطبيق وتنزيل التقارير المجمّعة» على مستوى الحساب كلّه.")
+        info.setWordWrap(True)
+        info.setTextFormat(Qt.RichText)
+        lay.addWidget(info)
+        form = QFormLayout()
+        krow = QHBoxLayout()
+        self.key = ltr(QLineEdit(key_path))
+        self.key.setPlaceholderText("…\\service-account.json")
+        self.key.setToolTip("يُحفظ مساره في settings.json على جهازك فقط، ولا يُرفع إلى GitHub")
+        krow.addWidget(self.key, 1)
+        krow.addWidget(make_btn("اختيار…", "اختر ملف مفتاح حساب الخدمة", self._pick_key))
+        form.addRow("مفتاح حساب الخدمة:", krow)
+        brow = QHBoxLayout()
+        self.bucket = ltr(QLineEdit(bucket))
+        self.bucket.setPlaceholderText("gs://pubsite_prod_rev_0123456789/")
+        brow.addWidget(self.bucket, 1)
+        brow.addWidget(make_btn("فتح Play Console", "افتح «تنزيل التقارير» وانسخ رابط المخزن",
+                                lambda: QDesktopServices.openUrl(QUrl("https://play.google.com/console/developers"))))
+        form.addRow("مخزن التقارير:", brow)
+        self.months = QSpinBox()
+        self.months.setRange(1, 12)
+        self.months.setValue(months)
+        self.months.setSuffix(" أشهر")
+        self.months.setToolTip("كم شهرًا إلى الوراء تُقرأ (الشهر الحالي منها)")
+        form.addRow("المدّة:", self.months)
+        lay.addLayout(form)
+        box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        box.button(QDialogButtonBox.Ok).setText("حفظ")
+        box.button(QDialogButtonBox.Cancel).setText("إلغاء")
+        box.accepted.connect(self.accept)
+        box.rejected.connect(self.reject)
+        lay.addWidget(box)
+
+    def _pick_key(self):
+        start = str(Path(self.key.text()).parent) if self.key.text() else str(Path.home())
+        path, _ = QFileDialog.getOpenFileName(self, "ملف مفتاح حساب الخدمة", start, "JSON (*.json)")
+        if path:
+            self.key.setText(path)
+
 
 # ───────────────────────── الواجهة ─────────────────────────
 def flash(btn: QPushButton, text: str = "✓ نُسخ", ms: int = 1400):
@@ -710,6 +906,38 @@ class Studio(QMainWindow):
         tip.setWordWrap(True)
         f.addRow("", tip)
         L.addWidget(box)
+
+        # إحصاءات الحملات
+        box = QGroupBox("نتائج الحملات (من Play Console)")
+        bl = QVBoxLayout(box)
+        row = QHBoxLayout()
+        self.btn_stats = make_btn("تحديث الإحصاءات", "يقرأ من Play Console زوّار صفحة المتجر وتنزيلاتها لكل حملة،"
+                                  " لكل التطبيقات", self.fetch_stats, "primary")
+        row.addWidget(self.btn_stats)
+        row.addWidget(make_btn("إعداد الإحصاءات", "مفتاح حساب الخدمة ومخزن التقارير والمدّة", self.stats_setup))
+        self.stats_lbl = QLabel()
+        self.stats_lbl.setObjectName("hint")
+        self.stats_lbl.setWordWrap(True)
+        row.addWidget(self.stats_lbl, 1)
+        bl.addLayout(row)
+        self.stats_table = QTableWidget(0, 5)
+        self.stats_table.setHorizontalHeaderLabels(["الحملة", "المصدر", "زوّار صفحة المتجر", "التنزيلات", "نسبة التحويل"])
+        self.stats_table.verticalHeader().setVisible(False)
+        self.stats_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.stats_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.stats_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        for c in range(1, 5):
+            self.stats_table.horizontalHeader().setSectionResizeMode(c, QHeaderView.ResizeToContents)
+        self.stats_table.setMinimumHeight(150)
+        self.stats_table.setToolTip("الأنجح أوّلًا. «الزوّار» من فتح صفحة التطبيق في المتجر عبر الرابط، و«التنزيلات»"
+                                    " من ثبّته منهم")
+        bl.addWidget(self.stats_table)
+        shint = QLabel("تظهر هنا الحملات التي جاءت من رابط الإعلان وحدها (فيه utm_campaign). التقرير يتأخّر يومين"
+                       " تقريبًا، وGoogle تُخفي الأعداد الصغيرة جدًّا أحيانًا.")
+        shint.setObjectName("hint")
+        shint.setWordWrap(True)
+        bl.addWidget(shint)
+        L.addWidget(box)
         L.addStretch()
 
         for w in (self.f_name, self.f_tagline, self.f_rating, self.f_downloads, self.ad_camp):
@@ -722,14 +950,119 @@ class Studio(QMainWindow):
         for w in (self.ad_primary, self.ad_headline, self.ad_desc):
             w.changed.connect(self._changed)
 
+    # ── الإحصاءات ──
+    def _app_stats(self, slug: str) -> list[dict] | None:
+        """حملات التطبيق من آخر قراءة، بمطابقة اسم الحزمة (فيصمد تغيير مفتاح الرابط)."""
+        pkg = parse_package(self.data["apps"].get(slug, {}).get("package", ""))
+        for s in self.stats.get("apps", {}).values():
+            if pkg and s.get("package") == pkg:
+                return s.get("campaigns", [])
+        return None
+
+    def _list_text(self, slug: str) -> str:
+        name = self.data["apps"][slug].get("name") or slug
+        camps = self._app_stats(slug)
+        if not camps:
+            return name
+        return f"{name}\n⬇ {sum(c['installs'] for c in camps)} تنزيلًا · {len(camps)} حملة"
+
+    def _show_stats(self):
+        t = self.stats_table
+        t.setRowCount(0)
+        camps = self._app_stats(self.current) if self.current else None
+        if not self.stats:
+            self.stats_lbl.setText("لم تُقرأ الإحصاءات بعد. اضغط «إعداد الإحصاءات» مرّة واحدة، ثم «تحديث الإحصاءات».")
+            return
+        when = self.stats.get("fetched", "")
+        months = self.stats.get("months", [])
+        span = f"{months[-1][:4]}/{months[-1][4:]} – {months[0][:4]}/{months[0][4:]}" if months else ""
+        if camps is None:
+            self.stats_lbl.setText(f"آخر قراءة {when}: لا بيانات لهذا التطبيق (اضغط «تحديث الإحصاءات»).")
+            return
+        if not camps:
+            self.stats_lbl.setText(f"آخر قراءة {when} (⁦{span}⁩): لا زيارات من روابط الإعلان بعد.")
+            return
+        self.stats_lbl.setText(f"آخر قراءة {when} · الأشهر ⁦{span}⁩ · الأنجح أوّلًا")
+        best = camps[0]["installs"]
+        for c in camps:
+            r = t.rowCount()
+            t.insertRow(r)
+            vals = [c["campaign"], c["source"], f"{c['visitors']:,}", f"{c['installs']:,}", f"{c['rate']:.1f}%"]
+            for col, v in enumerate(vals):
+                item = QTableWidgetItem(v)
+                if col >= 2:
+                    item.setTextAlignment(Qt.AlignCenter)
+                if col == 0:
+                    item.setToolTip(f"من {c.get('first', '')} إلى {c.get('last', '')}")
+                if r == 0 and best > 0:
+                    item.setForeground(QColor(C_OK))
+                t.setItem(r, col, item)
+        if best > 0:
+            t.item(0, 0).setText("★ " + camps[0]["campaign"])
+
+    def stats_setup(self) -> bool:
+        s = load_settings()
+        d = StatsDialog(self, s.get("stats_key", ""), s.get("stats_bucket", ""), int(s.get("stats_months", 3)))
+        d.setStyleSheet(STYLE + FEEDBACK_CSS)
+        if d.exec() != QDialog.Accepted:
+            return False
+        s = load_settings()      # الإعدادات المحلّية وحدها (مسار المفتاح لا يُرفع إلى GitHub)
+        s["stats_key"] = d.key.text().strip()
+        s["stats_bucket"] = normalize_bucket(d.bucket.text())
+        s["stats_months"] = d.months.value()
+        save_settings(s)
+        self.logmsg("✓ حُفظ إعداد الإحصاءات.", "ok")
+        return True
+
+    def fetch_stats(self):
+        s = load_settings()
+        key, bucket = s.get("stats_key", ""), s.get("stats_bucket", "")
+        if not key or not Path(key).is_file() or not bucket:
+            if not self.stats_setup():
+                return
+            s = load_settings()
+            key, bucket = s.get("stats_key", ""), s.get("stats_bucket", "")
+            if not key or not Path(key).is_file() or not bucket:
+                QMessageBox.information(self, "الإحصاءات", "يلزم ملف المفتاح ورابط المخزن معًا.")
+                return
+        packages = {slug: parse_package(a.get("package", "")) for slug, a in self.data["apps"].items()}
+        packages = {k: v for k, v in packages.items() if v}
+        if not packages:
+            QMessageBox.information(self, "الإحصاءات", "لا تطبيق برابط متجر صحيح.")
+            return
+        self.btn_stats.setEnabled(False)
+        self.btn_stats.setText("جارٍ القراءة…")
+        self.logmsg("أقرأ تقارير Play Console…", "info")
+        self.stats_worker = StatsWorker(key, bucket, packages, last_months(int(s.get("stats_months", 3))))
+        self.stats_worker.log.connect(self.logmsg)
+        self.stats_worker.done.connect(self._stats_done)
+        self.stats_worker.start()
+
+    def _stats_done(self, ok: bool, msg: str, stats: dict):
+        self.btn_stats.setEnabled(True)
+        self.btn_stats.setText("تحديث الإحصاءات")
+        if not ok:
+            self.logmsg(msg, "err")
+            flash(self.btn_stats, "✗ لم تُقرأ", 2500)
+            QMessageBox.warning(self, "الإحصاءات", msg)
+            return
+        self.stats = stats
+        try:
+            STATS_CACHE.write_text(json.dumps(stats, ensure_ascii=False, indent=2), encoding="utf-8")
+        except OSError:
+            pass
+        flash(self.btn_stats, "✓ حُدّثت", 2500)
+        self.logmsg(msg, "ok")
+        self._refresh_list(select=self.current)
+
     # ── القائمة ──
     def _refresh_list(self, select: str | None = None):
         self.list.blockSignals(True)
         self.list.clear()
         for slug, a in self.data["apps"].items():
-            it = QListWidgetItem(a.get("name") or slug)
+            it = QListWidgetItem(self._list_text(slug))
             it.setData(Qt.UserRole, slug)
-            it.setToolTip(f"?app={slug}")
+            it.setToolTip(f"?app={slug} · الرقم: تنزيلات الحملات المتتبَّعة في آخر قراءة للإحصاءات")
             self.list.addItem(it)
         self.list.blockSignals(False)
         slugs = list(self.data["apps"])
@@ -795,7 +1128,7 @@ class Studio(QMainWindow):
                    "campaign": self.ad_camp.text().strip()}
         it = self.list.currentItem()
         if it:
-            it.setText(a["name"] or self.current)
+            it.setText(self._list_text(self.current))
         self._update_pkg_hint()
         self._update_link()
         self._show_state(saving=True)
