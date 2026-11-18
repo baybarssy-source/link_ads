@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>تحميل التطبيق</title>
+<meta name="description" content="حمّل التطبيق من متجر Google Play">
+<meta property="og:title" content="حمّل التطبيق من Google Play">
+<meta property="og:type" content="website">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;700;800&display=swap" rel="stylesheet">
+<style>
+  :root { --c: #0f766e; --bg: #f6f7f9; --card: #fff; --ink: #1c2430; --muted: #5d6877; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #11161d; --card: #1a212b; --ink: #eef2f6; --muted: #9aa6b4; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; background: var(--bg); color: var(--ink);
+         font-family: "Tajawal", system-ui, sans-serif; direction: rtl;
+         display: flex; align-items: center; justify-content: center; padding: 16px; }
+  .card { width: 100%; max-width: 420px; background: var(--card); border-radius: 24px;
+          padding: 28px 22px; text-align: center; box-shadow: 0 10px 40px rgba(0,0,0,.08); }
+  .icon { width: 96px; height: 96px; border-radius: 22px; margin: 0 auto 14px; display: grid;
+          place-items: center; background: var(--c); color: #fff; font-size: 44px; font-weight: 800;
+          overflow: hidden; box-shadow: 0 6px 18px rgba(0,0,0,.15); }
+  .icon img { width: 100%; height: 100%; object-fit: cover; }
+  h1 { font-size: 24px; margin: 0 0 6px; }
+  .tag { color: var(--muted); margin: 0 0 14px; font-size: 16px; }
+  .stats { display: flex; justify-content: center; gap: 18px; color: var(--muted); font-size: 14px; margin-bottom: 16px; }
+  .stats b { color: var(--ink); }
+  .hero { display: block; width: 100%; border-radius: 16px; margin: 0 0 18px; }
+  .hero[hidden] { display: none; }
+  ul { list-style: none; padding: 0; margin: 18px 0 0; text-align: right; }
+  li { padding: 8px 12px; margin-bottom: 6px; border-radius: 12px; background: rgba(127,127,127,.08); }
+  li::before { content: "✓"; color: var(--c); font-weight: 800; margin-left: 8px; }
+  .btn { display: flex; align-items: center; justify-content: center; gap: 10px; width: 100%;
+         padding: 16px; border: 0; border-radius: 16px; background: var(--c); color: #fff;
+         font: 700 19px "Tajawal", sans-serif; text-decoration: none; cursor: pointer;
+         transition: transform .1s, filter .15s; }
+  .btn:active { transform: scale(.97); filter: brightness(.9); }
+  .btn svg { width: 24px; height: 24px; }
+  .note { margin-top: 12px; font-size: 14px; color: var(--muted); min-height: 1.4em; }
+  .foot { display: inline-block; margin-top: 18px; font-size: 13px; color: var(--muted); }
+  .cancel { background: none; border: 0; color: var(--muted); text-decoration: underline;
+            font: inherit; cursor: pointer; padding: 4px; }
+</style>
+</head>
+<body>
+<main class="card" id="card">
+  <div class="icon" id="icon"></div>
+  <h1 id="name"></h1>
+  <p class="tag" id="tagline"></p>
+  <div class="stats" id="stats"></div>
+  <img class="hero" id="hero" alt="" hidden>
+  <a class="btn" id="go" href="#" title="يفتح صفحة التطبيق في متجر Google Play">
+    <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3.6 1.8 13.4 12 3.6 22.2c-.4-.2-.6-.7-.6-1.2V3c0-.5.2-1 .6-1.2Zm11 11.4 2.4 2.4-11.3 6.4 8.9-8.8Zm3.7-3.7 2.8 1.6c.9.5.9 1.3 0 1.8l-2.8 1.6-2.6-2.5 2.6-2.5ZM5.7 2l11.3 6.4-2.4 2.4L5.7 2Z"/></svg>
+    <span>حمّل من Google Play</span>
+  </a>
+  <p class="note" id="note"></p>
+  <ul id="features"></ul>
+  <a class="foot" href="privacy.html" title="ما يُجمع في هذه الصفحة وما لا يُجمع">سياسة الخصوصية</a>
+</main>
+
+<script src="apps.js"></script>
+<script>
+(function () {
+  var q = new URLSearchParams(location.search);
+  var key = q.get("app") || window.DEFAULT_APP;
+  var app = (window.APPS || {})[key] || window.APPS[window.DEFAULT_APP];
+  var $ = function (id) { return document.getElementById(id); };
+
+  // مصدر الحملة يُمرَّر إلى Google Play فيظهر في تقارير «اكتساب المستخدمين»
+  var src = q.get("src") || "facebook";
+  var camp = q.get("camp") || "ad";
+  var referrer = encodeURIComponent("utm_source=" + src + "&utm_medium=paid&utm_campaign=" + camp);
+  var webUrl = "https://play.google.com/store/apps/details?id=" + app.package + "&referrer=" + referrer;
+  // رابط intent يفتح تطبيق المتجر مباشرة حتى من متصفّح فيسبوك الداخلي، وإن فشل يرجع لرابط الويب
+  var intentUrl = "intent://details?id=" + app.package + "&referrer=" + referrer +
+    "#Intent;scheme=market;package=com.android.vending;S.browser_fallback_url=" +
+    encodeURIComponent(webUrl) + ";end";
+
+  var isAndroid = /android/i.test(navigator.userAgent);
+  var target = isAndroid ? intentUrl : webUrl;
+
+  // Meta Pixel (اختياري): PageView عند الفتح، وLead مرّة واحدة عند الذهاب إلى المتجر
+  var pixel = window.META_PIXEL;
+  if (pixel && src !== "preview") {
+    !function(f,b,e,v,n,t,s){if(f.fbq)return;n=f.fbq=function(){n.callMethod?
+    n.callMethod.apply(n,arguments):n.queue.push(arguments)};if(!f._fbq)f._fbq=n;n.push=n;n.loaded=!0;
+    n.version='2.0';n.queue=[];t=b.createElement(e);t.async=!0;t.src=v;s=b.getElementsByTagName(e)[0];
+    s.parentNode.insertBefore(t,s)}(window,document,'script','https://connect.facebook.net/en_US/fbevents.js');
+    fbq('init', pixel);
+    fbq('track', 'PageView');
+  }
+  var leadSent = false;
+  // يرسل الحدث ثم يذهب إلى المتجر بعد مهلة قصيرة حتى لا يضيع الحدث مع الانتقال
+  function goStore() {
+    if (window.fbq && !leadSent) {
+      leadSent = true;
+      fbq('track', 'Lead', { content_name: app.name, content_category: camp });
+      setTimeout(function () { location.href = target; }, 350);
+    } else {
+      location.href = target;
+    }
+  }
+
+  // ملء الصفحة
+  document.title = "حمّل " + app.name;
+  document.documentElement.style.setProperty("--c", app.color || "#0f766e");
+  $("name").textContent = app.name;
+  $("tagline").textContent = app.tagline || "";
+  var icon = $("icon");
+  if (app.icon) {
+    var img = new Image();
+    img.alt = app.name;
+    img.onerror = function () { icon.textContent = app.name.charAt(0); };
+    img.src = app.icon;
+    icon.appendChild(img);
+  } else { icon.textContent = app.name.charAt(0); }
+  if (app.hero) {
+    var hero = $("hero");
+    hero.alt = app.name;
+    hero.onload = function () { hero.hidden = false; };
+    hero.src = app.hero;
+  }
+  var stats = [];
+  if (app.rating) stats.push("<span>★ <b>" + app.rating + "</b></span>");
+  if (app.downloads) stats.push("<span>أكثر من <b>" + app.downloads + "</b> تنزيل</span>");
+  $("stats").innerHTML = stats.join("");
+  (app.features || []).forEach(function (f) {
+    var li = document.createElement("li"); li.textContent = f; $("features").appendChild(li);
+  });
+
+  var go = $("go"), note = $("note");
+  go.href = target;
+  go.addEventListener("click", function (e) {
+    e.preventDefault();
+    cancelled = true;
+    note.textContent = "جارٍ فتح متجر Google Play…";
+    goStore();
+  });
+
+  // التحويل التلقائي على أندرويد فقط، بعدّ تنازلي ظاهر وزرّ إلغاء
+  var secs = (app.redirect != null ? app.redirect : window.REDIRECT_SECONDS) || 0, cancelled = false;
+  if (!isAndroid) {
+    note.textContent = "التطبيق متاح لأجهزة أندرويد. افتح هذا الرابط من هاتفك.";
+  } else if (secs > 0) {
+    var tick = function () {
+      if (cancelled) return;
+      if (secs <= 0) {
+        note.textContent = "جارٍ فتح متجر Google Play… إن لم يُفتح فاضغط الزرّ.";
+        goStore();
+        return;
+      }
+      note.innerHTML = "سيُفتح المتجر خلال " + secs + " ثانية · ";
+      var c = document.createElement("button");
+      c.className = "cancel"; c.textContent = "إلغاء"; c.title = "البقاء في هذه الصفحة";
+      c.onclick = function () { cancelled = true; note.textContent = "أُلغي التحويل. اضغط الزرّ متى شئت."; };
+      note.appendChild(c);
+      secs--; setTimeout(tick, 1000);
+    };
+    tick();
+  }
+})();
+</script>
+</body>
+</html>

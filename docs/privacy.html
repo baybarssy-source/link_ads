@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>سياسة الخصوصية</title>
+<link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;700&display=swap" rel="stylesheet">
+<style>
+  :root { --bg: #f6f7f9; --card: #fff; --ink: #1c2430; --muted: #5d6877; --c: #1f6b45; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #11161d; --card: #1a212b; --ink: #eef2f6; --muted: #9aa6b4; --c: #5fd08a; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.9 "Tajawal", system-ui, sans-serif;
+         direction: rtl; padding: 16px; }
+  main { max-width: 720px; margin: 0 auto; background: var(--card); border-radius: 20px; padding: 24px 22px; }
+  h1 { font-size: 24px; margin: 0 0 4px; }
+  h2 { font-size: 18px; color: var(--c); margin: 22px 0 6px; }
+  p, li { margin: 0 0 8px; }
+  ul { padding-right: 20px; padding-left: 0; margin: 0 0 8px; }
+  .muted { color: var(--muted); font-size: 14px; }
+  a { color: var(--c); }
+  .ltr { direction: ltr; unicode-bidi: isolate; }
+  [hidden] { display: none; }
+</style>
+</head>
+<body>
+<main>
+  <h1>سياسة الخصوصية</h1>
+  <p class="muted">لهذه الصفحة الوسيطة التي تنقلك من الإعلان إلى متجر Google Play. آخر تحديث: 18 نوفمبر 2026.</p>
+
+  <h2>ما هذه الصفحة</h2>
+  <p>صفحة تعريف قصيرة بالتطبيق، تفتح لك صفحته في متجر Google Play. لا تطلب منك تسجيلًا ولا اسمًا ولا بريدًا،
+     وليس فيها نموذج تكتب فيه شيئًا.</p>
+
+  <h2>ما يُجمع</h2>
+  <ul>
+    <li><b>سجلّات الاستضافة:</b> الصفحة مستضافة على GitHub Pages، وقد يحفظ GitHub عنوان IP ونوع المتصفّح لأغراض الأمان
+        وفق <a href="https://docs.github.com/site-policy/privacy-policies/github-general-privacy-statement" target="_blank" rel="noopener">سياسة خصوصيته</a>.</li>
+    <li id="pixel-item" hidden><b>Meta Pixel:</b> نستعمل أداة القياس من Meta لنعرف عدد من فتح الصفحة ومن ذهب إلى المتجر،
+        فنحسّن إعلاناتنا. قد تستعمل Meta ملفّات تعريف الارتباط (Cookies) وتربط الزيارة بحسابك فيها وفق
+        <a href="https://www.facebook.com/privacy/policy" target="_blank" rel="noopener">سياسة بيانات Meta</a>.
+        يمكنك ضبط ذلك من <a href="https://www.facebook.com/adpreferences" target="_blank" rel="noopener">تفضيلات الإعلانات</a>.</li>
+    <li><b>مصدر الحملة:</b> يمرّ اسم الحملة (مثل «<bdi>facebook</bdi>») إلى Google Play لنعرف أيّ إعلان جاء بالتنزيل، دون أيّ بيانات عنك شخصيًّا.</li>
+  </ul>
+
+  <h2>ما لا نفعله</h2>
+  <ul>
+    <li>لا نبيع بياناتك ولا نشاركها مع غير من ذُكر أعلاه.</li>
+    <li>لا نجمع بيانات الأطفال عمدًا.</li>
+  </ul>
+
+  <h2>بعد الانتقال إلى المتجر</h2>
+  <p>حين تفتح Google Play تسري عليك سياسة Google، وسياسة خصوصية التطبيق نفسه المذكورة في صفحته على المتجر.</p>
+
+  <h2 id="contact-h" hidden>التواصل</h2>
+  <p id="contact-p" hidden>لأيّ سؤال عن هذه السياسة: <a id="contact-a" class="ltr" href="#"></a></p>
+
+  <p class="muted"><a href="./">رجوع</a></p>
+</main>
+<script src="apps.js"></script>
+<script>
+  // يظهر بند البكسل والبريد فقط إن أُعدّا في «استوديو الإعلانات»
+  if (window.META_PIXEL) document.getElementById("pixel-item").hidden = false;
+  if (window.CONTACT_EMAIL) {
+    var a = document.getElementById("contact-a");
+    a.textContent = window.CONTACT_EMAIL; a.href = "mailto:" + window.CONTACT_EMAIL;
+    document.getElementById("contact-h").hidden = false;
+    document.getElementById("contact-p").hidden = false;
+  }
+  // الرجوع إلى الصفحة نفسها التي جاء منها (مع ?app=)
+  if (document.referrer && document.referrer.indexOf(location.origin) === 0) {
+    document.querySelector('a[href="./"]').href = document.referrer;
+  }
+</script>
+</body>
+</html>
