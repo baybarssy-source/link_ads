@@ -1,1 +1,4 @@
 PySide6>=6.5
+# لقراءة إحصاءات Play Console (التنزيلات لكل حملة)
+google-api-python-client>=2.0
+google-auth>=2.0

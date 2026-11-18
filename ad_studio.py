@@ -7,7 +7,9 @@
 - «نشر» يفتح «أداة الالتزام» (التزام.bat) لتلتزم وترفع، وعنوان الصفحة يُقرأ وحده من مستودع git.
 - تعطيك رابط الإعلان جاهزًا للنسخ، مع مصدر الحملة الذي يظهر في Play Console ← اكتساب المستخدمين.
 - نصوص الإعلان بعدّاد للحدّ الذي يظهر كاملًا في فيسبوك، ولكل نصّ زرّ نسخ.
-- كل تعديل يُحفظ وحده بعد لحظة (campaigns.json و site/apps.js).
+- كل تعديل يُحفظ وحده بعد لحظة (campaigns.json و docs/apps.js).
+- «تحديث الإحصاءات»: يقرأ من تقارير Play Console زوّار صفحة المتجر وتنزيلاتها لكل حملة (قراءة فقط)،
+  بمفتاح حساب الخدمة نفسه الذي تستعمله أداة النشر ve_up.
 
 التثبيت:  pip install -r المكتبات_المطلوبة.txt   (أو تثبيت_المكتبات.bat)
 التشغيل:  python -X utf8 ad_studio.py           (أو «استوديو الإعلانات.bat»)
@@ -708,6 +710,8 @@ class Studio(QMainWindow):
         self.settings = load_settings()
         self.current: str | None = None
         self.worker: CheckWorker | None = None
+        self.stats = load_stats()
+        self.stats_worker: StatsWorker | None = None
         self._loading = False
         self.save_timer = QTimer(self, singleShot=True, interval=600, timeout=self._save_now)
 
@@ -973,7 +977,7 @@ class Studio(QMainWindow):
         if not self.stats:
             self.stats_lbl.setText("لم تُقرأ الإحصاءات بعد. اضغط «إعداد الإحصاءات» مرّة واحدة، ثم «تحديث الإحصاءات».")
             return
-        when = self.stats.get("fetched", "")
+        when = "⁦" + self.stats.get("fetched", "") + "⁩"
         months = self.stats.get("months", [])
         span = f"{months[-1][:4]}/{months[-1][4:]} – {months[0][:4]}/{months[0][4:]}" if months else ""
         if camps is None:
@@ -1111,6 +1115,7 @@ class Studio(QMainWindow):
         self._loading = False
         self._update_pkg_hint()
         self._update_link()
+        self._show_stats()
 
     def _changed(self, *_):
         if self._loading or self.current is None:
@@ -1343,7 +1348,7 @@ class Studio(QMainWindow):
             self.logmsg(f"✓ قرأت المستودع من git: {remote}", "ok")
             self._update_link()
         if self.data["base_url"]:
-            self.host_lbl.setText(f"تُنشر على: {self.data['base_url']}")
+            self.host_lbl.setText(f"تُنشر على: ⁦{self.data['base_url']}⁩")
         else:
             self.host_lbl.setText("<span style='color:%s'>لم تُعدّ الاستضافة بعد ← «إعداد الاستضافة»</span>" % C_WARN)
 
@@ -1393,8 +1398,9 @@ class Studio(QMainWindow):
     def closeEvent(self, e):
         if self.save_timer.isActive():
             self._save_now()
-        if self.worker and self.worker.isRunning():
-            self.worker.wait(3000)
+        for wk in (self.worker, self.stats_worker):
+            if wk and wk.isRunning():
+                wk.wait(3000)
         self.settings = load_settings()
         self.settings["geometry"] = [self.width(), self.height()]
         self.settings["last_app"] = self.current
